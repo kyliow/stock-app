@@ -31,6 +31,21 @@ def main():
     lookback_interval = col3.number_input("Lookback interval: ", value=20)
 
     N_lookback_range = range(lookback_min, lookback_max + 1, lookback_interval)
+
+    big_df = pandas.DataFrame(
+        # {
+        #     "N_lookback": [],
+        #     "entry_id": [],
+        #     "entry_time": [],
+        #     "exit_id": [],
+        #     "exit_time": [],
+        #     "order": [],
+        #     "profit": [],
+        #     "drawdown": [],
+        #     "profit_factor": [],
+        # }
+    )
+
     total_profits = []
 
     is_generate_analysis = streamlit.button("Generate analysis", type="primary")
@@ -42,13 +57,16 @@ def main():
     lookback_range_len = len(N_lookback_range)
     for i, N_lookback in enumerate(N_lookback_range):
         progress_bar.progress(i / lookback_range_len, text="Analysis in progress.")
-        profits = []
+
         iterator = entries_and_exits.iterrows()
         for index, row in iterator:
             lookback_index = index - N_lookback
             exit_index, exit_row = next(iterator)
 
-            if row["Order"] == "L":
+            order_type = row["Order"]
+            entry_price = row["Entry"]
+            exit_price = exit_row["Exit"]
+            if order_type == "L":
                 optim_price = (
                     max(
                         [
@@ -61,6 +79,8 @@ def main():
                 is_second_order = (
                     df.iloc[index : exit_index + 1]["high"] >= optim_price
                 ).any()
+
+                drawdown_price = df.iloc[index : exit_index + 1]["low"].min()
 
             else:
                 optim_price = (
@@ -76,28 +96,58 @@ def main():
                     df.iloc[index : exit_index + 1]["low"] <= optim_price
                 ).any()
 
+                drawdown_price = df.iloc[index : exit_index + 1]["high"].max()
+
             if is_second_order:
-                price_diff = (row["Entry"] + optim_price) / 2 - exit_row["Exit"]
+                profit = exit_price - (entry_price + optim_price) / 2
             else:
-                price_diff = row["Entry"] - exit_row["Exit"]
+                profit = exit_price - entry_price
 
-            if row["Order"] == "S":
-                price_diff *= -1
+            if order_type == "S":
+                profit *= -1
 
-            profits.append(price_diff)
+            drawdown = abs(entry_price - drawdown_price)
 
-        total_profits.append(sum(profits))
+            sub_df = pandas.DataFrame(
+                {
+                    "N_lookback": [N_lookback],
+                    "entry_id": [index],
+                    "entry_time": [row["time"]],
+                    "exit_id": [exit_index],
+                    "exit_time": [exit_row["time"]],
+                    "order": [order_type],
+                    "entry_price": [entry_price],
+                    "exit_price": [exit_price],
+                    "optimal_price": [optim_price],
+                    "drawdown_price": [drawdown_price],
+                    "is_second_order": [is_second_order],
+                    "profit": [profit],
+                    "drawdown": [drawdown],
+                    "profit_factor": [profit / drawdown],
+                }
+            )
+            big_df = pandas.concat([big_df, sub_df])
+
+        total_profits.append(big_df[big_df["N_lookback"] == N_lookback]["profit"].sum())
 
     progress_bar.progress(1.0, "Analysis complete.")
 
     fig = px.line(x=N_lookback_range, y=total_profits)
-    fig.update_layout(xaxis_title="Lookback range", yaxis_title="Total profit")
+    fig.update_layout(
+        title="Profit over lookback",
+        xaxis_title="Lookback range",
+        yaxis_title="Total profit",
+    )
     streamlit.plotly_chart(fig)
 
     percentage_diff = (max(total_profits) / min(total_profits) - 1) * 100
     streamlit.metric(
         "Percentage difference between max and min", value=f"{percentage_diff:.2f}"
     )
+
+    streamlit.write("#### Individual transactions")
+
+    streamlit.write(big_df)
 
 
 if __name__ == "__main__":
